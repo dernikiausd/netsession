@@ -11,8 +11,8 @@ android {
         applicationId = "de.sanniki.netsession"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.1g1"
+        versionCode = 9
+        versionName = "0.1h2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

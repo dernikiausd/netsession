@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -11,6 +12,8 @@ import android.app.Activity
 import android.os.Bundle
 import android.os.IBinder
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -49,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -343,8 +347,12 @@ class MainActivity : ComponentActivity() {
                     },
                     onOpenHistorySession =
                         ::openHistorySession,
+                    onRenameHistorySession =
+                        ::renameHistorySession,
                     onDeleteHistorySession =
                         ::deleteHistorySession,
+                    onClearHistory =
+                        ::clearHistory,
                     onRequestPermission =
                         ::requestShizukuPermission,
                     onStartMeasurement =
@@ -732,6 +740,58 @@ class MainActivity : ComponentActivity() {
             "Gespeicherte Sitzung geöffnet."
     }
 
+    private fun renameHistorySession(
+        sessionId: String,
+        requestedName: String
+    ) {
+        val cleanName =
+            requestedName
+                .trim()
+                .take(60)
+
+        if (cleanName.isBlank()) {
+            statusMessage =
+                "Der Sitzungsname darf nicht leer sein."
+            return
+        }
+
+        val updatedHistory =
+            measurementHistory.map { session ->
+                if (session.id == sessionId) {
+                    session.copy(
+                        name = cleanName
+                    )
+                } else {
+                    session
+                }
+            }
+
+        if (updatedHistory == measurementHistory) {
+            return
+        }
+
+        measurementHistory =
+            updatedHistory
+
+        preferences
+            .edit()
+            .putString(
+                PREF_HISTORY,
+                encodeHistory(
+                    updatedHistory
+                )
+            )
+            .apply()
+
+        if (displayedSessionId == sessionId) {
+            displayedSessionName =
+                cleanName
+        }
+
+        statusMessage =
+            "Sitzung wurde umbenannt."
+    }
+
     private fun deleteHistorySession(
         sessionId: String
     ) {
@@ -793,6 +853,32 @@ class MainActivity : ComponentActivity() {
 
         statusMessage =
             "Sitzung wurde gelöscht."
+    }
+
+    private fun clearHistory() {
+        measurementHistory = emptyList()
+        results = emptyList()
+
+        lastMeasurementDuration = 0L
+        lastMeasurementStartedAt = 0L
+        lastMeasurementCompletedAt = 0L
+
+        displayedSessionName =
+            "Letzte Messung"
+
+        displayedSessionId = null
+
+        preferences
+            .edit()
+            .remove(PREF_HISTORY)
+            .remove(PREF_LAST_RESULTS)
+            .remove(PREF_LAST_DURATION)
+            .remove(PREF_LAST_STARTED_AT)
+            .remove(PREF_LAST_COMPLETED_AT)
+            .apply()
+
+        statusMessage =
+            "Alle gespeicherten Sitzungen wurden gelöscht."
     }
 
     private fun calculateResults(
@@ -1517,14 +1603,49 @@ private fun NetSessionScreen(
     onMeasurementNameChange: (String) -> Unit,
     onOpenHistorySession:
         (MeasurementSession) -> Unit,
+    onRenameHistorySession:
+        (String, String) -> Unit,
     onDeleteHistorySession:
         (String) -> Unit,
+    onClearHistory: () -> Unit,
     onRequestPermission: () -> Unit,
     onStartMeasurement: () -> Unit,
     onStopMeasurement: () -> Unit,
     onDiscardMeasurement: () -> Unit
 ) {
     val context = LocalContext.current
+
+    var pendingExportText by
+        remember {
+            mutableStateOf("")
+        }
+
+    val exportLauncher =
+        rememberLauncherForActivityResult(
+            contract =
+                ActivityResultContracts.CreateDocument(
+                    "text/plain"
+                )
+        ) { uri ->
+            if (uri != null) {
+                runCatching {
+                    context
+                        .contentResolver
+                        .openOutputStream(uri)
+                        ?.bufferedWriter()
+                        ?.use { writer ->
+                            writer.write(
+                                pendingExportText
+                            )
+                        }
+                        ?: error(
+                            "Die Zieldatei konnte nicht geöffnet werden."
+                        )
+                }
+            }
+
+            pendingExportText = ""
+        }
 
     Column(
         modifier =
@@ -1619,18 +1740,40 @@ private fun NetSessionScreen(
                     displayedSessionId,
                 onOpen =
                     onOpenHistorySession,
+                onRename =
+                    onRenameHistorySession,
+                onShare = { session ->
+                    shareTextReport(
+                        context = context,
+                        subject =
+                            "NetSession – " +
+                                session.name,
+                        text =
+                            formatSessionReport(
+                                session
+                            )
+                    )
+                },
+                onExport = { session ->
+                    pendingExportText =
+                        formatSessionReport(
+                            session
+                        )
+
+                    exportLauncher.launch(
+                        buildSessionFileName(
+                            session
+                        )
+                    )
+                },
                 onDelete =
-                    onDeleteHistorySession
+                    onDeleteHistorySession,
+                onClearAll =
+                    onClearHistory
             )
         }
 
-        Text(
-            text = "NetSession v0.1g1",
-            color =
-                MaterialTheme
-                    .colorScheme
-                    .onSurfaceVariant,
-            fontSize = 12.sp,
+        Column(
             modifier =
                 Modifier
                     .align(
@@ -1639,8 +1782,31 @@ private fun NetSessionScreen(
                     .padding(
                         top = 4.dp,
                         bottom = 12.dp
-                    )
-        )
+                    ),
+            horizontalAlignment =
+                Alignment.CenterHorizontally,
+            verticalArrangement =
+                Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = "NetSession v0.1h2",
+                color =
+                    MaterialTheme
+                        .colorScheme
+                        .onSurfaceVariant,
+                fontSize = 12.sp
+            )
+
+            Text(
+                text = "von dernikiausd",
+                color =
+                    MaterialTheme
+                        .colorScheme
+                        .onSurfaceVariant
+                        .copy(alpha = 0.72f),
+                fontSize = 11.sp
+            )
+        }
     }
 }
 
@@ -1902,6 +2068,37 @@ private fun MeasurementCard(
                             .onSurfaceVariant,
                     lineHeight = 21.sp
                 )
+
+                Card(
+                    modifier =
+                        Modifier.fillMaxWidth(),
+                    shape =
+                        RoundedCornerShape(
+                            16.dp
+                        ),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme
+                                    .colorScheme
+                                    .surfaceVariant
+                        )
+                ) {
+                    Text(
+                        text =
+                            "Sehr kurze Messungen können leer bleiben oder kleine Übertragungen zeitversetzt erfassen. Für aussagekräftige Ergebnisse mindestens 30 Sekunden messen.",
+                        modifier =
+                            Modifier.padding(
+                                14.dp
+                            ),
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        color =
+                            MaterialTheme
+                                .colorScheme
+                                .onSurfaceVariant
+                    )
+                }
 
                 OutlinedTextField(
                     value = measurementName,
@@ -2414,10 +2611,19 @@ private fun HistoryCard(
     sessions: List<MeasurementSession>,
     selectedSessionId: String?,
     onOpen: (MeasurementSession) -> Unit,
-    onDelete: (String) -> Unit
+    onRename: (String, String) -> Unit,
+    onShare: (MeasurementSession) -> Unit,
+    onExport: (MeasurementSession) -> Unit,
+    onDelete: (String) -> Unit,
+    onClearAll: () -> Unit
 ) {
     var showAll by
         androidx.compose.runtime.remember {
+            mutableStateOf(false)
+        }
+
+    var clearConfirmation by
+        remember {
             mutableStateOf(false)
         }
 
@@ -2480,6 +2686,18 @@ private fun HistoryCard(
                     onOpen = {
                         onOpen(session)
                     },
+                    onRename = { newName ->
+                        onRename(
+                            session.id,
+                            newName
+                        )
+                    },
+                    onShare = {
+                        onShare(session)
+                    },
+                    onExport = {
+                        onExport(session)
+                    },
                     onDelete = {
                         onDelete(session.id)
                     }
@@ -2517,6 +2735,104 @@ private fun HistoryCard(
                 }
             }
 
+            HorizontalDivider()
+
+            if (clearConfirmation) {
+                Card(
+                    modifier =
+                        Modifier.fillMaxWidth(),
+                    shape =
+                        RoundedCornerShape(16.dp),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme
+                                    .colorScheme
+                                    .errorContainer
+                        )
+                ) {
+                    Column(
+                        modifier =
+                            Modifier.padding(14.dp),
+                        verticalArrangement =
+                            Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text =
+                                "Wirklich alle Sitzungen löschen?",
+                            fontWeight =
+                                FontWeight.SemiBold,
+                            color =
+                                MaterialTheme
+                                    .colorScheme
+                                    .onErrorContainer
+                        )
+
+                        Text(
+                            text =
+                                "Alle gespeicherten Messungen und die aktuell angezeigte Auswertung werden dauerhaft entfernt.",
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color =
+                                MaterialTheme
+                                    .colorScheme
+                                    .onErrorContainer
+                        )
+
+                        Row(
+                            modifier =
+                                Modifier.fillMaxWidth(),
+                            horizontalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    clearConfirmation = false
+                                },
+                                modifier =
+                                    Modifier.weight(1f)
+                            ) {
+                                Text("Abbrechen")
+                            }
+
+                            Button(
+                                onClick = {
+                                    clearConfirmation = false
+                                    onClearAll()
+                                },
+                                modifier =
+                                    Modifier.weight(1f),
+                                colors =
+                                    ButtonDefaults.buttonColors(
+                                        containerColor =
+                                            MaterialTheme
+                                                .colorScheme
+                                                .error,
+                                        contentColor =
+                                            MaterialTheme
+                                                .colorScheme
+                                                .onError
+                                    )
+                            ) {
+                                Text("Alle löschen")
+                            }
+                        }
+                    }
+                }
+            } else {
+                OutlinedButton(
+                    onClick = {
+                        clearConfirmation = true
+                    },
+                    modifier =
+                        Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Alle Sitzungen löschen"
+                    )
+                }
+            }
+
             Text(
                 text =
                     "NetSession speichert höchstens $MAX_HISTORY_ENTRIES Sitzungen. Danach wird die älteste Sitzung automatisch entfernt.",
@@ -2536,13 +2852,33 @@ private fun HistoryRow(
     session: MeasurementSession,
     selected: Boolean,
     onOpen: () -> Unit,
+    onRename: (String) -> Unit,
+    onShare: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit
 ) {
     var deleteConfirmation by
-        androidx.compose.runtime.remember(
+        remember(
             session.id
         ) {
             mutableStateOf(false)
+        }
+
+    var renameVisible by
+        remember(
+            session.id
+        ) {
+            mutableStateOf(false)
+        }
+
+    var renameValue by
+        remember(
+            session.id,
+            session.name
+        ) {
+            mutableStateOf(
+                session.name
+            )
         }
 
     Column(
@@ -2614,7 +2950,62 @@ private fun HistoryRow(
             }
         }
 
-        if (deleteConfirmation) {
+        if (renameVisible) {
+            OutlinedTextField(
+                value = renameValue,
+                onValueChange = {
+                    renameValue =
+                        it.take(60)
+                },
+                modifier =
+                    Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = {
+                    Text(
+                        "Sitzungsname"
+                    )
+                }
+            )
+
+            Row(
+                modifier =
+                    Modifier.fillMaxWidth(),
+                horizontalArrangement =
+                    Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        renameValue =
+                            session.name
+                        renameVisible = false
+                    },
+                    modifier =
+                        Modifier.weight(1f)
+                ) {
+                    Text("Abbrechen")
+                }
+
+                Button(
+                    onClick = {
+                        val cleanName =
+                            renameValue.trim()
+
+                        if (cleanName.isNotBlank()) {
+                            onRename(cleanName)
+                            renameVisible = false
+                        }
+                    },
+                    enabled =
+                        renameValue
+                            .trim()
+                            .isNotBlank(),
+                    modifier =
+                        Modifier.weight(1f)
+                ) {
+                    Text("Speichern")
+                }
+            }
+        } else if (deleteConfirmation) {
             Text(
                 text =
                     "Diese Sitzung wirklich löschen?",
@@ -2653,7 +3044,8 @@ private fun HistoryRow(
             }
         } else {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier =
+                    Modifier.fillMaxWidth(),
                 horizontalArrangement =
                     Arrangement.spacedBy(8.dp)
             ) {
@@ -2672,15 +3064,53 @@ private fun HistoryRow(
                     )
                 }
 
-                TextButton(
+                OutlinedButton(
                     onClick = {
-                        deleteConfirmation = true
+                        renameValue =
+                            session.name
+                        renameVisible = true
                     },
                     modifier =
                         Modifier.weight(1f)
                 ) {
-                    Text("Löschen")
+                    Text("Umbenennen")
                 }
+            }
+
+            Row(
+                modifier =
+                    Modifier.fillMaxWidth(),
+                horizontalArrangement =
+                    Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onShare,
+                    modifier =
+                        Modifier.weight(1f)
+                ) {
+                    Text("Teilen")
+                }
+
+                OutlinedButton(
+                    onClick = onExport,
+                    modifier =
+                        Modifier.weight(1f)
+                ) {
+                    Text(
+                        "TXT speichern",
+                        maxLines = 1
+                    )
+                }
+            }
+
+            TextButton(
+                onClick = {
+                    deleteConfirmation = true
+                },
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+                Text("Sitzung löschen")
             }
         }
     }
@@ -3152,7 +3582,7 @@ private fun formatResultsReport(
                 it.defaultBytes
             }
 
-        appendLine("NetSession v0.1g1")
+        appendLine("NetSession v0.1h2")
         appendLine(
             "Netzwerkverbrauch im Messzeitraum"
         )
@@ -3368,6 +3798,77 @@ private fun formatResultsReport(
             "Hinweis: Vordergrund und Hintergrund entsprechen den Android-NetStats-Klassen FOREGROUND und DEFAULT."
         )
     }
+
+private fun formatSessionReport(
+    session: MeasurementSession
+): String =
+    formatResultsReport(
+        sessionName = session.name,
+        results = session.results,
+        measurementDuration =
+            session.durationMillis,
+        startedAt = session.startedAt,
+        completedAt = session.completedAt
+    )
+
+private fun buildSessionFileName(
+    session: MeasurementSession
+): String {
+    val datePart =
+        java.text.SimpleDateFormat(
+            "yyyy-MM-dd_HH-mm",
+            Locale.GERMANY
+        ).format(
+            java.util.Date(
+                session.completedAt
+            )
+        )
+
+    val safeName =
+        session.name
+            .trim()
+            .lowercase(Locale.GERMANY)
+            .replace(
+                Regex("[^a-z0-9äöüß]+"),
+                "_"
+            )
+            .trim('_')
+            .take(40)
+            .ifBlank {
+                "messung"
+            }
+
+    return "NetSession_" +
+        safeName +
+        "_" +
+        datePart +
+        ".txt"
+}
+
+private fun shareTextReport(
+    context: Context,
+    subject: String,
+    text: String
+) {
+    val shareIntent =
+        Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(
+                Intent.EXTRA_SUBJECT,
+                subject
+            )
+            .putExtra(
+                Intent.EXTRA_TEXT,
+                text
+            )
+
+    context.startActivity(
+        Intent.createChooser(
+            shareIntent,
+            "Sitzungsbericht teilen"
+        )
+    )
+}
 
 private fun encodeResults(
     results: List<AppTrafficResult>
