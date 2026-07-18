@@ -1,0 +1,39 @@
+# Android Studio / IntelliJ
+.idea/
+*.iml
+.navigation/
+captures/
+
+# Gradle
+.gradle/
+build/
+**/build/
+.externalNativeBuild/
+.cxx/
+
+# Lokale Android-Konfiguration
+local.properties
+
+# Signierung und Schlüssel
+*.jks
+*.keystore
+keystore.properties
+
+# Erzeugte Pakete und Berichte
+*.apk
+*.aab
+*.apks
+*.log
+
+# Lokale Entwicklungs- und Sicherungsdateien
+*.before_*
+*.bak
+*.orig
+*.rej
+apply_*.sh
+fix_*.sh
+.netsession-backup-*/
+
+# Betriebssystem
+.DS_Store
+Thumbs.db
