@@ -4,9 +4,19 @@ NetSession is an Android app that measures per-app network traffic during a manu
 
 It uses Android's network statistics through a Shizuku UserService and compares the UID counters at the beginning and end of each measurement.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/start.jpg" width="260" alt="NetSession start screen">
+  <img src="docs/screenshots/results.jpg" width="260" alt="NetSession per-app results">
+  <img src="docs/screenshots/history.jpg" width="260" alt="NetSession session history">
+</p>
+
 > **Development status:** Early alpha
 >
 > NetSession is functional, but interfaces, storage formats and behavior may still change.
+>
+> The current app interface is available in German.
 
 ## Features
 
